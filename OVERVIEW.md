@@ -10,11 +10,13 @@ Last updated: 2026-08-16
 Given a race course (GPX) and a goal pace, generates a segment-by-segment
 pacing plan (grade + heat adjusted) and a fueling plan (carbs/fluid/sodium).
 
-Current stage: fully deterministic MVP. No LLM call yet. The eventual
-plan is to add an LLM reasoning layer on top of this deterministic
-core, plus execution analysis and an eval harness — see
-`race-execution-engine-spec.md` for the full v1 spec and roadmap, and
-"Not built yet" below for the short version.
+Deterministic core (course/weather ingestion, pacing, fueling) plus an
+opt-in LLM reasoning layer (`reasoning/`) that turns the deterministic
+plan into a coaching narrative. The reasoning layer is the only part of
+the project that calls an LLM or costs money — everything else is free
+and fully deterministic. Execution analysis and an eval harness are
+still not built — see `race-execution-engine-spec.md` for the full v1
+spec and roadmap, and "Not built yet" below for the short version.
 
 ## Layout
 
@@ -22,15 +24,18 @@ core, plus execution analysis and an eval harness — see
 execution-engine/
 ├── engine/              deterministic math — pacing & fueling
 │   ├── pacing.py        grade adjustment, heat de-rate, target pace
-│   └── fueling.py       carb/fluid/sodium targets
+│   └── fueling.py       carb/fluid/sodium targets (+ ranges)
 ├── ingest/              turning raw inputs into structured data
 │   ├── gpx_course.py    GPX parsing → per-km CourseSegment list
 │   └── weather.py       Open-Meteo fetch (dependency-injected fetch_fn)
+├── reasoning/            LLM layer — the only part that costs money
+│   └── narrative.py      structured plan (free) + coaching narrative (LLM call)
 ├── scripts/
 │   └── generate_sample_gpx.py   builds data/sample_race.gpx
 ├── data/
 │   └── sample_race.gpx  synthetic 8km rolling course
-├── tests/               67 tests, pytest, no network calls required
+├── mmm25.gpx             real race course (Movistar Medio Maraton Madrid)
+├── tests/                81 tests, pytest, no network calls, no LLM calls
 ├── race_plan.py         MVP CLI — ties everything together
 ├── demo.py              quick sanity check with hand-built segments
 ├── requirements.txt     gpxpy, requests, pytest
@@ -50,7 +55,13 @@ Weather   ─┘                                        │
                                           race_fueling_plan()  (deterministic)
                                                       │
                                                       ▼
-                                              race_plan.py output
+                                              race_plan.py output  ──(free, always runs)
+                                                      │
+                                                      ▼  (only with --narrative)
+                                     structured_race_plan()  (deterministic, free)
+                                                      │
+                                                      ▼
+                                     generate_race_narrative()  (LLM call, costs money)
 ```
 
 ## Module notes
@@ -142,10 +153,40 @@ Weather   ─┘                                        │
   in tests. `race_plan.py` labels the source in its output so it's
   always clear which kind of weather you're looking at.
 
+**`reasoning/narrative.py`** — the LLM layer. Same dependency-injection
+pattern as `ingest/weather.py`'s `fetch_fn`: `call_llm_fn` defaults to
+a real Anthropic API call but every test injects a canned function
+instead, so this module has full test coverage with zero real API
+calls and zero cost.
+- `safety_flags_for_conditions(temp_c, humidity_pct)`: deterministic,
+  no LLM — flags WBGT ≥ 20.5°C ("non-elite races shouldn't start above
+  this") and ≥ 28°C (ACSM's hard competition limit), per the same
+  fluid/sodium literature review. Handed to the LLM as facts to
+  narrate, not something it computes or judges itself.
+- `structured_race_plan(segments, pace_plans, fueling_plan, weather_source, safety_flags)`:
+  pure serialization of what the deterministic engine already computed
+  (per-segment grade/heat factors, target pace, fueling ranges, safety
+  flags) into JSON-able `dict`. This *is* the "structured JSON output"
+  from the spec — no LLM involved in producing it, and it exists
+  whether or not `generate_race_narrative` is ever called.
+- `build_narrative_prompt(structured_plan)`: embeds that JSON verbatim
+  and instructs the model not to invent, recompute, or restate any
+  number not already in it — narrative and strategy only, per the
+  spec's "LLM sits on top, doesn't reinvent the math" design constraint.
+  Whether the model actually complies is a grounding-check problem for
+  `eval/`, not something this module enforces on its own.
+- `generate_race_narrative(segments, pace_plans, fueling_plan, weather_source, call_llm_fn=None)`:
+  ties it together, returns a `RaceNarrative(structured_plan, narrative_text)`.
+  Real calls use `DEFAULT_MODEL` (currently Haiku — cheapest current
+  model, short prompt, doesn't need more).
+
 **`race_plan.py`** — CLI entrypoint. `--gpx`, `--goal-pace`, plus either
 `--temp`/`--humidity` (manual) or `--lat`/`--lon`/`--date`/`--start-hour`
 (live fetch). Prints a per-segment pacing table + total time + fueling
-summary.
+summary — all free and deterministic. `--narrative` additionally calls
+the reasoning layer for a coaching narrative (needs `anthropic` +
+`ANTHROPIC_API_KEY`, costs a small amount, off by default; fails with a
+clear message rather than crashing if the package/key isn't set up).
 
 **`demo.py`** — pre-ingest sanity check with hand-built segments
 (predates `ingest/`). Superseded by `race_plan.py` for anything
@@ -154,17 +195,21 @@ on `engine/` without needing a GPX file.
 
 ## Testing
 
-`pytest tests/ -v` — 67 tests, fully deterministic, no network calls
-(weather module tested via injected canned `fetch_fn`; the GPX layer
-has a real-file integration check against `data/sample_race.gpx`
-alongside the pure-function unit tests).
+`pytest tests/ -v` — 81 tests, fully deterministic, no network calls,
+no LLM calls (weather module tested via injected canned `fetch_fn`;
+reasoning module tested via injected canned `call_llm_fn`, same
+pattern; the GPX layer has a real-file integration check against
+`data/sample_race.gpx` alongside the pure-function unit tests).
 
 ## Not built yet (see `race-execution-engine-spec.md` for detail)
 
-- [ ] `reasoning/` — LLM layer: structured plan + coaching narrative
-      on top of the deterministic engine (not a replacement for it)
+- [x] `reasoning/` — LLM layer: structured plan (free, deterministic) +
+      coaching narrative (opt-in LLM call via `race_plan.py --narrative`)
 - [ ] execution analysis — planned vs. actual splits
-- [ ] `eval/` — eval harness (called out as the portfolio centerpiece)
+- [ ] `eval/` — eval harness (called out as the portfolio centerpiece;
+      the narrative's "don't invent numbers" grounding constraint is
+      only a prompt instruction right now — checking whether the model
+      actually complies needs this)
 - [ ] frontend
 
 ## Open questions / things to revisit as this grows

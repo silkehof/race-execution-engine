@@ -1,3 +1,7 @@
 gpxpy>=1.6
 requests>=2.30
 pytest>=7.0
+
+# Optional, only needed for `race_plan.py --narrative` (real LLM call,
+# costs money) -- not required to run the deterministic core or tests:
+#   pip install anthropic

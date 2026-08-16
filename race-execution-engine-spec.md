@@ -5,7 +5,7 @@ this describes what the finished v1 looks like and the shape of each
 remaining layer. Update this as decisions get made — sections below are
 a starting proposal, not locked.
 
-Last updated: 2026-08-15
+Last updated: 2026-08-16
 
 ## Problem
 
@@ -40,9 +40,9 @@ them.
 1. Ingest              ─┐
 2. Deterministic engine ├─ built (see OVERVIEW.md)
                         ─┘
-3. Reasoning (LLM)      ─┐
-4. Execution analysis    ├─ this spec
-5. Eval harness          │
+3. Reasoning (LLM)      ─ built, narrower scope than originally sketched (see below)
+4. Execution analysis    ┐
+5. Eval harness          ├─ this spec
 6. Frontend             ─┘
 ```
 
@@ -51,31 +51,52 @@ them.
 See `OVERVIEW.md` for current state. This is the ground truth the
 reasoning layer sits on top of and must not contradict.
 
-### 3. Reasoning layer (`reasoning/`) — not built
+### 3. Reasoning layer (`reasoning/`) — built (`reasoning/narrative.py`)
 
 Takes the deterministic `SegmentPacePlan` list + `FuelingPlan` (already
-produced by `race_plan.py`) plus free-text runner context (goals,
-constraints, known issues — e.g. "I cramp if I go out too fast", "I can
-only tolerate 3 gels") and produces:
+produced by `race_plan.py`) and produces:
 
-- A structured plan object (JSON-serializable — segments + fueling
-  timing, e.g. "gel at km 6, 8, 10") that the frontend/eval harness can
-  consume without re-parsing prose.
-- A short coaching narrative in prose, grounded in the structured plan.
+- A structured plan object (`structured_race_plan()` — JSON-serializable
+  segments + fueling numbers + WBGT safety flags). This part is pure
+  Python, no LLM call, and exists regardless of whether a narrative is
+  ever generated.
+- A short coaching narrative in prose (`generate_race_narrative()`),
+  grounded in that structured plan, via a single LLM call.
 
-Design constraint: the LLM must not recompute or override the
-grade/heat/fueling math — it consumes the deterministic numbers as
-given and reasons about strategy, sequencing, and tradeoffs on top of
-them. If the LLM's output disagrees with the deterministic numbers
-(e.g. states a pace that doesn't match `format_pace()` output for that
-segment), that's a bug to catch in the eval harness, not a matter of
-LLM judgment.
+Design constraint honored: the prompt explicitly tells the model not to
+invent, recompute, or restate any number not already in the structured
+JSON — narrative and strategy only. *Whether the model actually
+complies is not yet verified* — that's exactly the eval harness's
+grounding-check job (section 5), still not built.
 
-Open questions:
-- Single LLM call over the whole plan, or per-segment calls stitched
-  together?
-- How is runner free-text context structured — freeform string, or a
-  small schema (known GI issues, race goals, prior DNF reasons)?
+Resolved open questions from the original spec:
+- **Single LLM call**, not per-segment — the whole structured plan is
+  small enough to fit in one prompt.
+- **LLM provider/model**: Anthropic, `claude-haiku-4-5-20251001` by
+  default (cheapest current model — the prompt is short and doesn't
+  need more reasoning power). Dependency-injected (`call_llm_fn`) the
+  same way `ingest/weather.py` injects `fetch_fn`, so the whole module
+  has full test coverage with zero real API calls.
+
+Deliberately **out of scope for this pass** (narrower than the original
+sketch above):
+- **No free-text runner context** (goals/constraints like "I can only
+  tolerate 3 gels") — the narrative is generated from the deterministic
+  plan alone. Adding this is a real follow-up, not a bug; it would need
+  a decision on structure (freeform string vs. a small schema) same as
+  originally flagged.
+- **No per-km fueling schedule** ("gel at km 6, 8, 10") — the narrative
+  discusses fueling *timing relative to terrain* in prose (e.g. fueling
+  around a tough climb) but doesn't generate a structured gel-by-gel
+  schedule. Would need a decision on what unit of fueling to schedule
+  around (calories per gel? user's own product?) that the engine
+  doesn't currently model.
+- Added beyond the original sketch: **WBGT safety flags**
+  (`safety_flags_for_conditions()`) — computed deterministically from
+  the fluid/sodium literature review's ACSM thresholds (WBGT ≥20.5°C
+  "non-elite races shouldn't start," ≥28°C hard competition limit), fed
+  to the LLM as facts to open the narrative with, not something it
+  computes itself.
 
 ### 4. Execution analysis — not built
 
@@ -125,11 +146,13 @@ layer, not reimplement any formatting logic already in `race_plan.py`.
 
 ## Roadmap / suggested order
 
-1. `reasoning/` — structured plan + narrative, single-call, minimal
-   runner context (freeform string) to start.
+1. ~~`reasoning/` — structured plan + narrative, single-call~~ — built,
+   no runner context yet (see section 3's "out of scope" list).
 2. `eval/` grounding + consistency checks against `reasoning/` — these
    don't require an LLM judge and catch the most damaging failure mode
-   (LLM contradicting the deterministic math) early.
+   (LLM contradicting the deterministic math) early. **Next up** — the
+   grounding constraint in `build_narrative_prompt()` is currently just
+   a prompt instruction, unverified.
 3. Execution analysis — needs at least one real race's actual splits
    to be useful; can be stubbed with synthetic "actual" data before
    that.
@@ -139,6 +162,6 @@ layer, not reimplement any formatting logic already in `race_plan.py`.
 
 ## Open questions (repo-level)
 
-- No git repo yet at the project root — worth initializing before the
-  reasoning layer work starts, to track that transition cleanly.
-- LLM provider/model choice for `reasoning/` — not yet decided.
+- ~~No git repo yet~~ — resolved, see https://github.com/silkehof/race-execution-engine (private).
+- ~~LLM provider/model choice for `reasoning/`~~ — resolved: Anthropic,
+  `claude-haiku-4-5-20251001` by default, see `reasoning/narrative.py`.

@@ -2,7 +2,10 @@
 
 Given a race course (GPX) and a goal pace, generates a segment-by-segment
 pacing plan (grade + heat adjusted) and a fueling plan (carbs/fluid/sodium).
-Fully deterministic so far — the LLM reasoning layer is the next piece.
+The pacing/fueling core is fully deterministic and free to run. An
+opt-in LLM layer (`--narrative`) turns that plan into a coaching
+narrative — the only part of the project that calls an LLM or costs
+money.
 
 ## Setup
 
@@ -16,8 +19,9 @@ pip install -r requirements.txt
 pytest tests/ -v
 ```
 
-67 tests, all deterministic — no network calls required (the weather
-module uses dependency injection so it's tested with canned responses).
+81 tests, all deterministic — no network calls and no LLM calls required
+(the weather and reasoning modules both use dependency injection so
+they're tested with canned responses).
 
 ## Run the MVP
 
@@ -42,9 +46,26 @@ the date is within the forecast window, the same command switches to
 a live forecast automatically.
 
 `data/sample_race.gpx` is a synthetic rolling 8km course
-(`scripts/generate_sample_gpx.py`) — swap in your real race's GPX
+(`scripts/generate_sample_gpx.py`); `mmm25.gpx` is a real half marathon
+course (Movistar Medio Maraton Madrid) — swap in your own race's GPX
 (exportable from Strava, Garmin Connect, or most race organizer sites)
 whenever you have it.
+
+## Adding a coaching narrative (optional, costs money)
+
+```bash
+pip install anthropic
+export ANTHROPIC_API_KEY=...
+python race_plan.py --gpx data/sample_race.gpx --goal-pace 5:05 --temp 18 --humidity 55 --narrative
+```
+
+Everything above this flag is free and deterministic. `--narrative`
+makes one real Anthropic API call (currently Haiku — see
+`reasoning/narrative.py`) to turn the already-computed plan into a
+short coaching note. It's given the exact numbers and told not to
+invent, recompute, or restate anything not already there — its job is
+strategy and narrative (e.g. "don't bank time on the km 8 downhill,
+that's where the heat starts biting"), not the math.
 
 ## Architecture
 
@@ -59,11 +80,15 @@ Weather   ─┘                                        │
                                           race_fueling_plan()  (deterministic)
                                                       │
                                                       ▼
-                                              race_plan.py output
+                                              race_plan.py output  (free, always)
+                                                      │
+                                                      ▼  (only with --narrative)
+                                     structured_race_plan() → generate_race_narrative()
+                                                                (LLM call, costs money)
 ```
 
 See `race-execution-engine-spec.md` for the full v1 spec and roadmap
-(LLM reasoning layer, execution analysis, eval harness — not built yet).
+(execution analysis, eval harness — not built yet).
 
 ## What's built so far
 
@@ -71,8 +96,8 @@ See `race-execution-engine-spec.md` for the full v1 spec and roadmap
 - [x] `engine/fueling.py` — carbs (point) + fluid/sodium as ranges, not point targets (ACSM/Sawka et al. 2007, Baker et al. 2017/2023) with a "drink to thirst" safety caveat in the CLI output, 17 tests
 - [x] `ingest/gpx_course.py` — GPX parsing + segmentation, 15 tests (incl. integration checks against `data/sample_race.gpx`)
 - [x] `ingest/weather.py` — Open-Meteo fetch, historical-average fallback beyond the forecast window (dependency-injected), 9 tests
+- [x] `reasoning/narrative.py` — structured plan (free) + coaching narrative (opt-in LLM call, dependency-injected same as weather), WBGT-based safety flags, 14 tests
 - [x] `race_plan.py` — MVP CLI tying it all together
-- [ ] `reasoning/` — LLM layer: structured plan + coaching narrative
 - [ ] execution analysis — planned vs actual splits
-- [ ] `eval/` — the eval harness (the portfolio centerpiece)
+- [ ] `eval/` — the eval harness (the portfolio centerpiece; the narrative's grounding constraint is a prompt instruction right now, not something verified yet)
 - [ ] frontend
