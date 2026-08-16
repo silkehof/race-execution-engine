@@ -32,15 +32,32 @@ from dataclasses import dataclass
 # running costs) then rises again as braking/eccentric-load costs
 # take over, crossing back above flat-ground cost around -40%.
 #
-# Note: Minetti's curve is the *theoretical minimum metabolic cost*.
-# Strava's real-world, heart-rate-calibrated GAP model instead
-# plateaus the downhill benefit around -10% grade, because real
-# runners don't extract the full theoretical downhill benefit on
-# steep descents (control, footing, injury risk). Minetti is used
-# here as the more citable, peer-reviewed default — if you want the
-# more conservative "what runners actually do" curve instead of
-# "what's metabolically cheapest," cap the effective grade passed in
-# at -0.10 before calling this.
+# Note: Minetti's curve is the *theoretical minimum metabolic cost* --
+# the pace at which effort per km is held exactly constant. In practice
+# this is too aggressive to be an actionable per-km target: on a real
+# course (e.g. a +4.2%/-3.4% rolling profile) it swings pace by upwards
+# of 2 minutes/km around goal pace, which no one can or should actually
+# chase km-by-km -- cardiovascular effort has inertia, and hammering
+# the theoretical-minimum-cost pace on a short descent is exactly the
+# "banking time you'll lose to fatigue/heat later" mistake this project
+# is supposed to help avoid, not encourage. This is the same practical
+# gap Strava found in their own real-world, heart-rate-calibrated GAP
+# model: real runners don't extract the full theoretical downhill
+# benefit on steep descents (control, footing, injury risk) or fully
+# commit to the theoretical uphill slowdown either.
+#
+# grade_adjustment_factor() therefore *damps* the raw Minetti ratio
+# toward flat pace by default (GRADE_DAMPING_RATIO) rather than
+# applying it in full -- pass damping_ratio=1.0 to get the pure,
+# undamped Minetti curve back (exposed via race_plan.py
+# --raw-grade-model). Unlike the Minetti curve itself, the damping
+# ratio isn't from a citation -- there's no published "how much do real
+# racers under-adjust vs. the theoretical optimum" number to fit to.
+# 0.5 is a documented, tunable starting heuristic: half the theoretical
+# swing is still clearly hill-aware pacing, but stays within a range a
+# runner can actually execute. Applied symmetrically to uphill and
+# downhill for now, though Strava's own finding was downhill-specific --
+# worth revisiting if this needs more precision later.
 #
 # Neither curve captures eccentric muscle-damage accumulation from a
 # long descent early in a race (legs trashed by mile 20) — that's a
@@ -48,6 +65,7 @@ from dataclasses import dataclass
 # the reasoning/coaching layer, not here.
 
 MINETTI_GRADE_CLAMP = 0.45  # curve is only validated across -45% to +45% grade
+GRADE_DAMPING_RATIO = 0.5   # default: half the theoretical Minetti swing -- see note above
 
 
 def minetti_energy_cost(grade: float) -> float:
@@ -56,14 +74,19 @@ def minetti_energy_cost(grade: float) -> float:
     return 155.4 * i**5 - 30.4 * i**4 - 43.3 * i**3 + 46.3 * i**2 + 19.5 * i + 3.6
 
 
-def grade_adjustment_factor(grade: float) -> float:
+def grade_adjustment_factor(grade: float, damping_ratio: float = GRADE_DAMPING_RATIO) -> float:
     """
-    Returns a multiplier to apply to flat-ground pace for this grade,
-    as the ratio of metabolic cost at this grade vs. flat ground.
+    Returns a multiplier to apply to flat-ground pace for this grade.
     1.0 = no change, >1.0 = slower, <1.0 = faster.
+
+    damping_ratio blends the raw Minetti-derived ratio toward 1.0 (flat
+    pace): 1.0 = the full, undamped theoretical-effort-equivalent curve;
+    0.5 (default) = half that swing, a more practically executable
+    target; 0.0 = no grade adjustment at all.
     """
     clamped_grade = max(-MINETTI_GRADE_CLAMP, min(MINETTI_GRADE_CLAMP, grade))
-    return minetti_energy_cost(clamped_grade) / minetti_energy_cost(0.0)
+    raw_ratio = minetti_energy_cost(clamped_grade) / minetti_energy_cost(0.0)
+    return 1 + damping_ratio * (raw_ratio - 1)
 
 
 # --- Heat de-rate -------------------------------------------------------
@@ -143,12 +166,14 @@ def segment_target_pace(
     grade: float,
     temp_c: float,
     humidity_pct: float,
+    grade_damping_ratio: float = GRADE_DAMPING_RATIO,
 ) -> SegmentPacePlan:
     """
     Combines grade adjustment and heat de-rate into a single target pace
-    (seconds per km) for one course segment.
+    (seconds per km) for one course segment. grade_damping_ratio=1.0
+    uses the raw, undamped Minetti curve -- see grade_adjustment_factor().
     """
-    grade_factor = grade_adjustment_factor(grade)
+    grade_factor = grade_adjustment_factor(grade, damping_ratio=grade_damping_ratio)
     heat_factor = heat_derate_factor(temp_c, humidity_pct)
     target = base_pace_sec_per_km * grade_factor * heat_factor
 

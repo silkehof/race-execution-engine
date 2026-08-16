@@ -19,7 +19,7 @@ pip install -r requirements.txt
 pytest tests/ -v
 ```
 
-81 tests, all deterministic — no network calls and no LLM calls required
+89 tests, all deterministic — no network calls and no LLM calls required
 (the weather and reasoning modules both use dependency injection so
 they're tested with canned responses).
 
@@ -50,6 +50,22 @@ a live forecast automatically.
 course (Movistar Medio Maraton Madrid) — swap in your own race's GPX
 (exportable from Strava, Garmin Connect, or most race organizer sites)
 whenever you have it.
+
+## Grade model: practical (default) vs. raw
+
+The per-km target pace is grade-adjusted using Minetti et al. 2002's
+metabolic-cost curve. Used *raw*, that curve swings pace by 2+ min/km
+on a real, fairly modest rolling course (Madrid's ~4% hills) — a
+constant-effort theoretical target, not something a runner can actually
+execute km-by-km. By default the swing is damped by half
+(`GRADE_DAMPING_RATIO = 0.5` in `engine/pacing.py`) toward a more
+pace-able target; add `--raw-grade-model` to see the undamped curve.
+The header always states which one is active:
+
+```bash
+python race_plan.py --gpx mmm25.gpx --goal-pace 5:05 --temp 22 --humidity 55                    # practical (default)
+python race_plan.py --gpx mmm25.gpx --goal-pace 5:05 --temp 22 --humidity 55 --raw-grade-model   # raw Minetti
+```
 
 ## Adding a coaching narrative (optional, costs money)
 
@@ -92,7 +108,7 @@ See `race-execution-engine-spec.md` for the full v1 spec and roadmap
 
 ## What's built so far
 
-- [x] `engine/pacing.py` — grade adjustment (Minetti et al. 2002) + heat de-rate (WBGT, Ely et al. 2007 / El Helou et al. 2012), 26 tests
+- [x] `engine/pacing.py` — grade adjustment (Minetti et al. 2002, damped by default for practical pacing, `--raw-grade-model` for the undamped curve) + heat de-rate (WBGT, Ely et al. 2007 / El Helou et al. 2012), 34 tests
 - [x] `engine/fueling.py` — carbs (point) + fluid/sodium as ranges, not point targets (ACSM/Sawka et al. 2007, Baker et al. 2017/2023) with a "drink to thirst" safety caveat in the CLI output, 17 tests
 - [x] `ingest/gpx_course.py` — GPX parsing + segmentation, 15 tests (incl. integration checks against `data/sample_race.gpx`)
 - [x] `ingest/weather.py` — Open-Meteo fetch, historical-average fallback beyond the forecast window (dependency-injected), 9 tests

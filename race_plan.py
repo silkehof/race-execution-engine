@@ -29,7 +29,7 @@ Usage examples:
 import argparse
 import sys
 
-from engine.pacing import segment_target_pace, format_pace, parse_pace
+from engine.pacing import segment_target_pace, format_pace, parse_pace, GRADE_DAMPING_RATIO
 from engine.fueling import race_fueling_plan
 from ingest.gpx_course import segment_course_from_gpx
 from ingest.weather import fetch_weather, HISTORICAL_AVERAGE_YEARS
@@ -73,6 +73,14 @@ def main():
     parser.add_argument("--start-hour", type=int, default=8, help="Race start hour, local time (default 8)")
 
     parser.add_argument(
+        "--raw-grade-model", action="store_true",
+        help="Use the raw, undamped Minetti grade curve instead of the practical "
+             f"default (damping_ratio={GRADE_DAMPING_RATIO}). The raw curve holds "
+             "metabolic effort exactly constant per km, which swings target pace "
+             "far more than most runners can actually execute -- see engine/pacing.py.",
+    )
+
+    parser.add_argument(
         "--narrative", action="store_true",
         help="Also generate a coaching narrative via the reasoning layer. "
              "Needs ANTHROPIC_API_KEY and the anthropic package -- costs a small amount. Off by default.",
@@ -84,9 +92,12 @@ def main():
     temp_c, humidity_pct, weather_label = get_weather(args)
 
     segments = segment_course_from_gpx(args.gpx, segment_length_km=args.segment_length)
+    grade_damping_ratio = 1.0 if args.raw_grade_model else GRADE_DAMPING_RATIO
+    grade_model_label = "raw Minetti (undamped)" if args.raw_grade_model else f"practical (damping={GRADE_DAMPING_RATIO})"
 
     print(f"Course: {args.gpx}  ({len(segments)} segments @ {args.segment_length}km)")
     print(f"Goal pace: {args.goal_pace}/km   Conditions: {temp_c:.0f}C, {humidity_pct:.0f}% humidity  [{weather_label}]")
+    print(f"Grade model: {grade_model_label}")
     print()
     print(f"{'Seg':>4} {'Dist':>6} {'Grade':>7}   Target pace   Segment time")
     print("-" * 55)
@@ -96,7 +107,10 @@ def main():
     pace_plans = []
 
     for seg in segments:
-        plan = segment_target_pace(base_pace_sec, seg.avg_grade, temp_c, humidity_pct)
+        plan = segment_target_pace(
+            base_pace_sec, seg.avg_grade, temp_c, humidity_pct,
+            grade_damping_ratio=grade_damping_ratio,
+        )
         pace_plans.append(plan)
         seg_time_sec = plan.target_pace_sec_per_km * seg.distance_km
         total_time_sec += seg_time_sec

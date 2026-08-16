@@ -67,19 +67,28 @@ Weather   ─┘                                        │
 ## Module notes
 
 **`engine/pacing.py`** — pure functions, no I/O.
-- `grade_adjustment_factor(grade)`: ratio of metabolic cost at this
-  grade vs. flat ground, from Minetti et al. 2002's fitted polynomial
-  (`minetti_energy_cost`) — the same physiological basis Strava's GAP
-  is built on. Uphill cost rises convexly (10% grade costs ~66% more
-  than flat, not the ~33% a linear model would suggest); downhill cost
-  drops to a minimum around -18% grade (~half of flat) before rising
-  again, crossing back above flat-ground cost around -40%. Clamped to
-  ±45% grade (`MINETTI_GRADE_CLAMP`), the range the curve is validated
-  for. Not fitted to this project's own data — it's the published
-  research curve as-is, not a personal calibration. Was previously a
-  hand-picked piecewise-linear approximation that had a bug: it flipped
-  sign around -18/-20% grade and predicted steep descents were *harder*
-  than flat, which contradicts every source checked.
+- `grade_adjustment_factor(grade, damping_ratio=GRADE_DAMPING_RATIO)`:
+  ratio of metabolic cost at this grade vs. flat ground, from Minetti
+  et al. 2002's fitted polynomial (`minetti_energy_cost`) — the same
+  physiological basis Strava's GAP is built on. Uphill cost rises
+  convexly (10% grade costs ~66% more than flat, not the ~33% a linear
+  model would suggest); downhill cost drops to a minimum around -18%
+  grade (~half of flat) before rising again, crossing back above
+  flat-ground cost around -40%. Clamped to ±45% grade
+  (`MINETTI_GRADE_CLAMP`), the range the curve is validated for.
+  **The raw curve is too aggressive to be an actionable per-km target**
+  — on a real ~4% rolling course (Madrid) it swings pace by 2+ min/km,
+  more than a runner can/should chase km-by-km. So by default the
+  ratio is *damped* toward flat pace by `GRADE_DAMPING_RATIO` (0.5 —
+  half the theoretical swing), a documented heuristic, not a citation
+  (unlike the Minetti curve itself). `damping_ratio=1.0` recovers the
+  raw, undamped curve — exposed via `race_plan.py --raw-grade-model`.
+  Was previously a hand-picked piecewise-linear approximation that had
+  a bug: it flipped sign around -18/-20% grade and predicted steep
+  descents were *harder* than flat, which contradicts every source
+  checked; that bug is what the Minetti swap originally fixed, and the
+  damping is a separate, later fix for "the raw research curve isn't
+  practically pace-able."
 - `heat_derate_factor(temp_c, humidity_pct)`: indexed by simplified WBGT
   (`simplified_wbgt`, ACSM's temp+humidity-only formula — no new
   ingestion needed) rather than raw dry-bulb temperature, per Ely et
@@ -183,10 +192,13 @@ calls and zero cost.
 **`race_plan.py`** — CLI entrypoint. `--gpx`, `--goal-pace`, plus either
 `--temp`/`--humidity` (manual) or `--lat`/`--lon`/`--date`/`--start-hour`
 (live fetch). Prints a per-segment pacing table + total time + fueling
-summary — all free and deterministic. `--narrative` additionally calls
-the reasoning layer for a coaching narrative (needs `anthropic` +
-`ANTHROPIC_API_KEY`, costs a small amount, off by default; fails with a
-clear message rather than crashing if the package/key isn't set up).
+summary — all free and deterministic. `--raw-grade-model` switches from
+the practical damped grade curve to the raw Minetti curve (see above);
+the output header always labels which one is active. `--narrative`
+additionally calls the reasoning layer for a coaching narrative (needs
+`anthropic` + `ANTHROPIC_API_KEY`, costs a small amount, off by
+default; fails with a clear message rather than crashing if the
+package/key isn't set up).
 
 **`demo.py`** — pre-ingest sanity check with hand-built segments
 (predates `ingest/`). Superseded by `race_plan.py` for anything
@@ -195,7 +207,7 @@ on `engine/` without needing a GPX file.
 
 ## Testing
 
-`pytest tests/ -v` — 81 tests, fully deterministic, no network calls,
+`pytest tests/ -v` — 89 tests, fully deterministic, no network calls,
 no LLM calls (weather module tested via injected canned `fetch_fn`;
 reasoning module tested via injected canned `call_llm_fn`, same
 pattern; the GPX layer has a real-file integration check against
@@ -214,6 +226,18 @@ pattern; the GPX layer has a real-file integration check against
 
 ## Open questions / things to revisit as this grows
 
+- **Grade damping ratio (0.5) is a heuristic, applied symmetrically.**
+  Unlike the Minetti curve it damps, there's no published number for
+  "how much do real racers under-adjust vs. the theoretical metabolic
+  optimum" to fit to — 0.5 was chosen because it visibly fixes the
+  "not executable in real life" problem (Madrid's ~4% rolling profile
+  goes from a ~2:07/km swing to ~1:04/km) without being arbitrary in
+  the other direction (fully flattening the hill signal). It's applied
+  the same way to uphill and downhill; Strava's own real-world
+  recalibration was downhill-specific (runners undershoot the
+  theoretical *downhill* benefit more than they undershoot the uphill
+  slowdown), so asymmetric damping is a plausible refinement if this
+  gets revisited with real GPS splits to check against.
 - **Pace-tiered heat sensitivity, deferred.** `heat_derate_factor` uses
   a single mid-pack/recreational WBGT slope (~1.8%/5°C, per Ely et al.
   2007). Ely's data shows this varies a lot by pace/effort — a

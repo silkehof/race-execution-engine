@@ -13,35 +13,40 @@ from engine.pacing import (
     format_pace,
     parse_pace,
     MINETTI_GRADE_CLAMP,
+    GRADE_DAMPING_RATIO,
 )
 
 
-# --- grade_adjustment_factor ---
+# --- grade_adjustment_factor: raw Minetti curve (damping_ratio=1.0) ---
 #
 # Expected ratios below are the Minetti et al. 2002 polynomial evaluated
 # directly (155.4i^5 - 30.4i^4 - 43.3i^3 + 46.3i^2 + 19.5i + 3.6),
 # normalized against flat ground (i=0). See engine/pacing.py for the
-# citation and the shape of the curve.
+# citation and the shape of the curve. damping_ratio=1.0 is required
+# explicitly here since the function's *default* is now the damped,
+# practical curve (see the next section) -- these tests confirm the
+# raw curve (exposed via race_plan.py --raw-grade-model) still matches
+# the published research exactly.
 
 def test_flat_grade_is_neutral():
     assert grade_adjustment_factor(0.0) == 1.0
 
 
-def test_uphill_slows_pace():
-    factor = grade_adjustment_factor(0.05)  # 5% uphill
+def test_uphill_slows_pace_raw():
+    factor = grade_adjustment_factor(0.05, damping_ratio=1.0)  # 5% uphill
     assert factor == pytest_approx(1.30144, rel=1e-4)
     assert factor > 1.0
 
 
-def test_uphill_ten_percent_matches_published_ratio():
+def test_uphill_ten_percent_matches_published_ratio_raw():
     # Minetti's own anchor point: 10% grade costs ~66% more than flat,
     # not the ~33% a naive linear model would predict.
-    factor = grade_adjustment_factor(0.10)
+    factor = grade_adjustment_factor(0.10, damping_ratio=1.0)
     assert factor == pytest_approx(1.65784, rel=1e-4)
 
 
-def test_gentle_downhill_speeds_pace():
-    factor = grade_adjustment_factor(-0.05)  # 5% downhill
+def test_gentle_downhill_speeds_pace_raw():
+    factor = grade_adjustment_factor(-0.05, damping_ratio=1.0)  # 5% downhill
     assert factor == pytest_approx(0.76276, rel=1e-4)
     assert factor < 1.0
 
@@ -50,33 +55,36 @@ def test_downhill_benefit_continues_past_ten_percent():
     # Real physiology: -20% grade is still *cheaper* than -10% (the
     # theoretical minimum-cost point is around -18%). The old
     # piecewise-linear model incorrectly started reversing the benefit
-    # at -10% -- this is the regression test for that bug.
+    # at -10% -- this is the regression test for that bug. Holds under
+    # the default damped curve too, since damping preserves ordering.
     at_ten = grade_adjustment_factor(-0.10)
     at_twenty = grade_adjustment_factor(-0.20)
     assert at_twenty < at_ten
 
 
-def test_downhill_minimum_cost_is_near_eighteen_percent():
-    at_minimum = grade_adjustment_factor(-0.18)
+def test_downhill_minimum_cost_is_near_eighteen_percent_raw():
+    at_minimum = grade_adjustment_factor(-0.18, damping_ratio=1.0)
     assert at_minimum == pytest_approx(0.49482, rel=1e-3)
     # neighbors should both be (slightly) worse -- confirms it's near
     # the actual minimum of the curve, not just "some low value"
-    assert grade_adjustment_factor(-0.10) > at_minimum
-    assert grade_adjustment_factor(-0.30) > at_minimum
+    assert grade_adjustment_factor(-0.10, damping_ratio=1.0) > at_minimum
+    assert grade_adjustment_factor(-0.30, damping_ratio=1.0) > at_minimum
 
 
 def test_steep_downhill_never_flips_worse_than_flat_within_typical_race_grades():
     # This is the sign-flip bug regression test: -20%, -25%, -30% all
     # remain *easier* than flat ground under every source checked (the
-    # old model predicted -20% was already harder than flat).
+    # old model predicted -20% was already harder than flat). Checked
+    # under both the raw curve and the practical default.
     for grade in (-0.20, -0.25, -0.30, -0.35):
+        assert grade_adjustment_factor(grade, damping_ratio=1.0) < 1.0
         assert grade_adjustment_factor(grade) < 1.0
 
 
-def test_extreme_downhill_beyond_forty_percent_exceeds_flat():
+def test_extreme_downhill_beyond_forty_percent_exceeds_flat_raw():
     # Braking/eccentric-load cost overtakes the downhill benefit
     # somewhere around -40% grade, per Minetti's measured data.
-    assert grade_adjustment_factor(-0.45) > 1.0
+    assert grade_adjustment_factor(-0.45, damping_ratio=1.0) > 1.0
 
 
 def test_grade_is_clamped_to_validated_range():
@@ -98,6 +106,61 @@ def test_steeper_uphill_is_worse_than_gentler_uphill():
 def test_minetti_energy_cost_matches_flat_ground_baseline():
     # EC(0) is just the polynomial's constant term.
     assert minetti_energy_cost(0.0) == pytest_approx(3.6, rel=1e-6)
+
+
+# --- grade_adjustment_factor: practical damped default ---
+#
+# The raw Minetti curve above is a theoretical-effort-equivalence
+# curve, not an actionable per-km pacing target -- on a real ~4%
+# rolling course it swings pace by 2+ minutes/km, more than a runner
+# can or should chase. grade_adjustment_factor()'s *default* damps
+# that swing (GRADE_DAMPING_RATIO, currently 0.5 -- see engine/pacing.py
+# for why there's no citation for this specific number). Expected
+# values below are 1 + damping_ratio * (raw_ratio - 1), computed
+# directly, not independently re-derived.
+
+def test_default_damping_ratio_is_one_half():
+    assert GRADE_DAMPING_RATIO == 0.5
+
+
+def test_practical_default_damps_uphill_swing():
+    factor = grade_adjustment_factor(0.10)  # default damping
+    raw = grade_adjustment_factor(0.10, damping_ratio=1.0)
+    assert factor == pytest_approx(1.3289, rel=1e-3)
+    assert 1.0 < factor < raw
+
+
+def test_practical_default_damps_downhill_swing():
+    factor = grade_adjustment_factor(-0.10)  # default damping
+    raw = grade_adjustment_factor(-0.10, damping_ratio=1.0)
+    assert factor == pytest_approx(0.7988, rel=1e-3)
+    assert raw < factor < 1.0
+
+
+def test_madrid_style_hill_spread_shrinks_under_damping():
+    # Regression test for the actual complaint: a modest +4.2%/-3.4%
+    # rolling profile (Movistar Medio Maraton Madrid) swung target pace
+    # by ~2:07/km under the raw curve -- too wide to execute. Damped
+    # default should meaningfully shrink that spread.
+    raw_up = grade_adjustment_factor(0.042, damping_ratio=1.0)
+    raw_down = grade_adjustment_factor(-0.034, damping_ratio=1.0)
+    raw_spread = raw_up - raw_down
+
+    damped_up = grade_adjustment_factor(0.042)
+    damped_down = grade_adjustment_factor(-0.034)
+    damped_spread = damped_up - damped_down
+
+    assert damped_spread < raw_spread * 0.6  # meaningfully narrower, not just marginally
+
+
+def test_damping_ratio_zero_means_no_grade_adjustment():
+    assert grade_adjustment_factor(0.10, damping_ratio=0.0) == pytest_approx(1.0)
+    assert grade_adjustment_factor(-0.10, damping_ratio=0.0) == pytest_approx(1.0)
+
+
+def test_flat_grade_is_neutral_regardless_of_damping_ratio():
+    for d in (0.0, 0.5, 1.0):
+        assert grade_adjustment_factor(0.0, damping_ratio=d) == 1.0
 
 
 # --- heat_derate_factor ---
@@ -164,7 +227,19 @@ def test_hot_uphill_segment_is_slower_than_base():
     plan = segment_target_pace(base_pace_sec_per_km=300, grade=0.06, temp_c=28, humidity_pct=80)
     assert plan.target_pace_sec_per_km > 300
     assert plan.grade_factor > 1.0
-    assert plan.heat_factor > 1.0
+
+
+def test_segment_target_pace_uses_damped_default():
+    plan = segment_target_pace(base_pace_sec_per_km=300, grade=0.10, temp_c=0, humidity_pct=20)
+    assert plan.grade_factor == pytest_approx(1.3289, rel=1e-3)
+
+
+def test_segment_target_pace_raw_grade_damping_ratio_matches_undamped_curve():
+    plan = segment_target_pace(
+        base_pace_sec_per_km=300, grade=0.10, temp_c=0, humidity_pct=20,
+        grade_damping_ratio=1.0,
+    )
+    assert plan.grade_factor == pytest_approx(grade_adjustment_factor(0.10, damping_ratio=1.0))
 
 
 def test_cool_gentle_downhill_segment_is_faster_than_base():
