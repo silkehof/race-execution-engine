@@ -3,7 +3,7 @@
 Living document. Update this as the project grows — new modules, new
 layers, new decisions. Keep it in sync with reality, not aspirational.
 
-Last updated: 2026-08-15
+Last updated: 2026-08-16
 
 ## What this is
 
@@ -30,7 +30,7 @@ execution-engine/
 │   └── generate_sample_gpx.py   builds data/sample_race.gpx
 ├── data/
 │   └── sample_race.gpx  synthetic 8km rolling course
-├── tests/               44 tests, pytest, no network calls required
+├── tests/               67 tests, pytest, no network calls required
 ├── race_plan.py         MVP CLI — ties everything together
 ├── demo.py              quick sanity check with hand-built segments
 ├── requirements.txt     gpxpy, requests, pytest
@@ -88,11 +88,32 @@ Weather   ─┘                                        │
 
 **`engine/fueling.py`** — pure functions, no I/O.
 - `carb_target_g_per_hr(duration_hr)`: tiered ramp, 0g (<1hr) →
-  30-60g (1-2.5hr) → 60-90g (>2.5hr, caps at 4hr).
+  30-60g (1-2.5hr) → 60-90g (>2.5hr, caps at 4hr). Single point value —
+  carb burn is fairly consistent across individuals for a given
+  duration, unlike fluid/sodium below.
 - `fluid_target_ml_per_hr` / `sodium_target_mg_per_hr`: baseline +
-  heat/humidity-scaled extra, same shape as the pacing heat de-rate.
-- `race_fueling_plan(duration_hr, temp_c, humidity_pct)`: combines all
-  three into a `FuelingPlan` with per-hour and total figures.
+  heat/humidity-scaled extra (same onset-threshold shape the pacing
+  heat model used to have, before that was upgraded to WBGT — this
+  pair hasn't had that upgrade, still raw dry-bulb temp). These are
+  "center" estimates, not the public API — see the range functions below.
+- `fluid_target_ml_per_hr_range` / `sodium_target_mg_per_hr_range`:
+  returns `(low, high)`, a ±33% band around the center estimate.
+  Checked against the literature (ACSM/Sawka et al. 2007; Baker et al.,
+  Sports Med 2017 and J Appl Physiol 2023): real individual sweat
+  rate/sodium loss varies far more than weather alone predicts (sweat
+  rate ~0.4-2+ L/hr, sodium loss ~600-6000+ mg/hr in salty sweaters) —
+  too much for a point estimate to be honest. The ±33% band width is
+  deliberately narrower than that full clinical extreme (which would be
+  impractically wide to act on) — it's derived from ACSM's own cited
+  generic sodium guidance (300-600 mg/hr, i.e. ±33% around a 450 mg/hr
+  midpoint) and applied to both fluid and sodium as a practical
+  "typical variation" band, not a claim about the true extremes.
+- `race_fueling_plan(duration_hr, temp_c, humidity_pct)`: combines carbs
+  (point) + fluid/sodium (ranges) into a `FuelingPlan`.
+- `race_plan.py`'s output bakes in the "drink to thirst" caveat here
+  too — a fixed fluid target is a documented cause of exercise-
+  associated hyponatremia (EAH) from overdrinking beyond actual losses,
+  per the Wilderness Medical Society's 2019 EAH guidelines.
 
 **`ingest/gpx_course.py`**
 - `segment_course_from_profile(cum_dist_km, elevations, segment_length_km)`:
@@ -133,7 +154,7 @@ on `engine/` without needing a GPX file.
 
 ## Testing
 
-`pytest tests/ -v` — 59 tests, fully deterministic, no network calls
+`pytest tests/ -v` — 67 tests, fully deterministic, no network calls
 (weather module tested via injected canned `fetch_fn`; the GPX layer
 has a real-file integration check against `data/sample_race.gpx`
 alongside the pure-function unit tests).
@@ -158,14 +179,17 @@ alongside the pure-function unit tests).
   the runner's *goal* pace threaded in as a tier proxy (predicted
   finish time isn't known yet at this point in the pipeline — using it
   directly would be circular) plus a design decision on tier boundaries.
-- Both `grade_adjustment_factor` (Minetti et al. 2002 polynomial) and
+- `grade_adjustment_factor` (Minetti et al. 2002 polynomial),
   `heat_derate_factor` (WBGT-indexed, Ely et al. 2007 / El Helou et al.
-  2012) are now built from cited published research rather than
-  hand-picked constants — see `engine/pacing.py` for the full citations
-  and derivations. Still not calibrated to any individual runner's own
-  splits, and `engine/fueling.py`'s fluid/sodium heat scaling hasn't
-  had the same research pass yet (it's a separate, independent
-  heuristic from the pacing heat model, same onset-threshold pattern
-  the old heat model used).
-- No git repo yet at the project root — worth initializing once the
-  reasoning layer work starts, to track that transition cleanly.
+  2012), and `fluid_target_ml_per_hr_range` / `sodium_target_mg_per_hr_range`
+  (ACSM/Sawka et al. 2007, Baker et al. Sports Med 2017 / J Appl Physiol
+  2023) are all now built from cited published research rather than
+  hand-picked constants — see `engine/pacing.py` and `engine/fueling.py`
+  for the full citations and derivations. Still not calibrated to any
+  individual runner's own splits or sweat rate.
+- `engine/fueling.py`'s fluid/sodium *center estimate* (the ranges'
+  midpoint) still uses the old raw-dry-bulb-temperature onset-threshold
+  heuristic (same shape the pacing heat model used to have before its
+  WBGT upgrade) — the range band around it is now research-grounded,
+  but the center it's built on isn't yet. Worth the same WBGT swap
+  `heat_derate_factor` got, if this gets picked up again.

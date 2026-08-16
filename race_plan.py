@@ -105,9 +105,22 @@ def main():
     fp = race_fueling_plan(duration_hr=total_hr, temp_c=temp_c, humidity_pct=humidity_pct)
     print()
     print("Fueling plan:")
-    print(f"  Carbs:  {fp.carbs_g_per_hr:.0f} g/hr   -> {fp.total_carbs_g:.0f} g total")
-    print(f"  Fluid:  {fp.fluid_ml_per_hr:.0f} ml/hr  -> {fp.total_fluid_ml:.0f} ml total")
-    print(f"  Sodium: {fp.sodium_mg_per_hr:.0f} mg/hr -> {fp.total_sodium_mg:.0f} mg total")
+    print(f"  Carbs:  {fp.carbs_g_per_hr:.0f} g/hr          -> {fp.total_carbs_g:.0f} g total")
+    print(
+        f"  Fluid:  {fp.fluid_ml_per_hr_low:.0f}-{fp.fluid_ml_per_hr_high:.0f} ml/hr    "
+        f"-> {fp.total_fluid_ml_low:.0f}-{fp.total_fluid_ml_high:.0f} ml total"
+    )
+    print(
+        f"  Sodium: {fp.sodium_mg_per_hr_low:.0f}-{fp.sodium_mg_per_hr_high:.0f} mg/hr   "
+        f"-> {fp.total_sodium_mg_low:.0f}-{fp.total_sodium_mg_high:.0f} mg total"
+    )
+    print()
+    print("  Fluid/sodium are ranges, not targets -- real sweat rate and sweat")
+    print("  sodium loss vary far more between individuals than weather alone")
+    print("  predicts. Drink to thirst, don't force intake to hit a number --")
+    print("  overdrinking beyond your losses is a real risk (exercise-")
+    print("  associated hyponatremia). A sweat test or a pre/post long-run")
+    print("  weigh-in is the only way to calibrate your own real numbers.")
 
 
 if __name__ == "__main__":

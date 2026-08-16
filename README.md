@@ -16,7 +16,7 @@ pip install -r requirements.txt
 pytest tests/ -v
 ```
 
-62 tests, all deterministic — no network calls required (the weather
+67 tests, all deterministic — no network calls required (the weather
 module uses dependency injection so it's tested with canned responses).
 
 ## Run the MVP
@@ -68,7 +68,7 @@ See `race-execution-engine-spec.md` for the full v1 spec and roadmap
 ## What's built so far
 
 - [x] `engine/pacing.py` — grade adjustment (Minetti et al. 2002) + heat de-rate (WBGT, Ely et al. 2007 / El Helou et al. 2012), 26 tests
-- [x] `engine/fueling.py` — carb/fluid/sodium targets, 12 tests
+- [x] `engine/fueling.py` — carbs (point) + fluid/sodium as ranges, not point targets (ACSM/Sawka et al. 2007, Baker et al. 2017/2023) with a "drink to thirst" safety caveat in the CLI output, 17 tests
 - [x] `ingest/gpx_course.py` — GPX parsing + segmentation, 15 tests (incl. integration checks against `data/sample_race.gpx`)
 - [x] `ingest/weather.py` — Open-Meteo fetch, historical-average fallback beyond the forecast window (dependency-injected), 9 tests
 - [x] `race_plan.py` — MVP CLI tying it all together

@@ -7,8 +7,11 @@ import pytest
 from engine.fueling import (
     carb_target_g_per_hr,
     fluid_target_ml_per_hr,
+    fluid_target_ml_per_hr_range,
     sodium_target_mg_per_hr,
+    sodium_target_mg_per_hr_range,
     race_fueling_plan,
+    RANGE_BAND_RATIO,
 )
 
 
@@ -74,17 +77,62 @@ def test_heat_increases_sodium_need():
     assert sodium_target_mg_per_hr(28, 70) > 400
 
 
+# --- fluid/sodium ranges ---
+#
+# Individual sweat rate/sodium loss varies too much for a point estimate
+# to be honest -- see engine/fueling.py for the citations. The band
+# width (+-33%) is derived from ACSM's own commonly-cited generic
+# sodium range (300-600 mg/hr, i.e. +-33% around a 450 mg/hr midpoint).
+
+def test_fluid_range_brackets_the_point_estimate():
+    center = fluid_target_ml_per_hr(20, 60)
+    low, high = fluid_target_ml_per_hr_range(20, 60)
+    assert low < center < high
+
+
+def test_fluid_range_width_matches_band_ratio():
+    center = fluid_target_ml_per_hr(20, 60)
+    low, high = fluid_target_ml_per_hr_range(20, 60)
+    assert low == pytest.approx(center * (1 - RANGE_BAND_RATIO))
+    assert high == pytest.approx(center * (1 + RANGE_BAND_RATIO))
+
+
+def test_sodium_range_brackets_the_point_estimate():
+    center = sodium_target_mg_per_hr(20, 60)
+    low, high = sodium_target_mg_per_hr_range(20, 60)
+    assert low < center < high
+
+
+def test_sodium_range_matches_acsm_generic_band_in_cool_conditions():
+    # At/below the heat onset, the center estimate is exactly the
+    # baseline (400 mg/hr), so the range should land close to ACSM's
+    # own cited 300-600 mg/hr generic guidance.
+    low, high = sodium_target_mg_per_hr_range(10, 50)
+    assert low == pytest.approx(400 * (2 / 3))
+    assert high == pytest.approx(400 * (4 / 3))
+
+
 # --- race_fueling_plan (integration) ---
 
 def test_plan_totals_scale_with_duration():
     plan = race_fueling_plan(duration_hr=1.78, temp_c=18, humidity_pct=55)
     assert plan.total_carbs_g == pytest.approx(plan.carbs_g_per_hr * 1.78)
-    assert plan.total_fluid_ml == pytest.approx(plan.fluid_ml_per_hr * 1.78)
-    assert plan.total_sodium_mg == pytest.approx(plan.sodium_mg_per_hr * 1.78)
+    assert plan.total_fluid_ml_low == pytest.approx(plan.fluid_ml_per_hr_low * 1.78)
+    assert plan.total_fluid_ml_high == pytest.approx(plan.fluid_ml_per_hr_high * 1.78)
+    assert plan.total_sodium_mg_low == pytest.approx(plan.sodium_mg_per_hr_low * 1.78)
+    assert plan.total_sodium_mg_high == pytest.approx(plan.sodium_mg_per_hr_high * 1.78)
+
+
+def test_plan_fluid_and_sodium_are_valid_ranges():
+    plan = race_fueling_plan(duration_hr=1.78, temp_c=22, humidity_pct=55)
+    assert plan.fluid_ml_per_hr_low < plan.fluid_ml_per_hr_high
+    assert plan.sodium_mg_per_hr_low < plan.sodium_mg_per_hr_high
 
 
 def test_hot_race_plan_has_higher_fluid_than_cool_race():
     cool_plan = race_fueling_plan(duration_hr=1.78, temp_c=12, humidity_pct=50)
     hot_plan = race_fueling_plan(duration_hr=1.78, temp_c=27, humidity_pct=75)
-    assert hot_plan.fluid_ml_per_hr > cool_plan.fluid_ml_per_hr
-    assert hot_plan.sodium_mg_per_hr > cool_plan.sodium_mg_per_hr
+    assert hot_plan.fluid_ml_per_hr_low > cool_plan.fluid_ml_per_hr_low
+    assert hot_plan.fluid_ml_per_hr_high > cool_plan.fluid_ml_per_hr_high
+    assert hot_plan.sodium_mg_per_hr_low > cool_plan.sodium_mg_per_hr_low
+    assert hot_plan.sodium_mg_per_hr_high > cool_plan.sodium_mg_per_hr_high
