@@ -34,6 +34,7 @@ from engine.fueling import race_fueling_plan
 from ingest.gpx_course import segment_course_from_gpx
 from ingest.weather import fetch_weather, HISTORICAL_AVERAGE_YEARS
 from reasoning.narrative import generate_race_narrative
+from eval.grounding import evaluate_race_narrative
 
 WEATHER_SOURCE_LABELS = {
     "forecast": "live forecast",
@@ -84,6 +85,11 @@ def main():
         "--narrative", action="store_true",
         help="Also generate a coaching narrative via the reasoning layer. "
              "Needs ANTHROPIC_API_KEY and the anthropic package -- costs a small amount. Off by default.",
+    )
+    parser.add_argument(
+        "--eval", action="store_true",
+        help="Run grounding checks against the generated narrative (only meaningful "
+             "with --narrative -- no extra API cost, checks the response already returned).",
     )
 
     args = parser.parse_args()
@@ -166,6 +172,23 @@ def main():
         else:
             print()
             print(result.narrative_text)
+
+            if args.eval:
+                report = evaluate_race_narrative(result)
+                print()
+                if report.is_grounded:
+                    print(
+                        f"Grounding check: PASSED -- {len(report.checked_pace_mentions)} pace "
+                        f"mention(s) and {len(report.checked_time_mentions)} total-time mention(s) "
+                        "in the narrative all matched the structured plan."
+                    )
+                else:
+                    print(f"Grounding check: FAILED -- {len(report.violations)} issue(s):")
+                    for v in report.violations:
+                        print(f"  [{v.kind}] \"{v.mentioned}\" -- {v.reason}")
+    elif args.eval:
+        print()
+        print("--eval has nothing to check without --narrative -- skipped.", file=sys.stderr)
 
 
 if __name__ == "__main__":

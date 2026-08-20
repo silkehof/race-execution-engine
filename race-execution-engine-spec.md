@@ -5,7 +5,7 @@ this describes what the finished v1 looks like and the shape of each
 remaining layer. Update this as decisions get made — sections below are
 a starting proposal, not locked.
 
-Last updated: 2026-08-16
+Last updated: 2026-08-20
 
 ## Problem
 
@@ -41,9 +41,9 @@ them.
 2. Deterministic engine ├─ built (see OVERVIEW.md)
                         ─┘
 3. Reasoning (LLM)      ─ built, narrower scope than originally sketched (see below)
-4. Execution analysis    ┐
-5. Eval harness          ├─ this spec
-6. Frontend             ─┘
+4. Execution analysis   ─ not built
+5. Eval harness         ─ grounding checks built; consistency/constraint/quality/backtest not built
+6. Frontend             ─ not built
 ```
 
 ### 1–2. Ingest + deterministic engine — built
@@ -65,9 +65,8 @@ produced by `race_plan.py`) and produces:
 
 Design constraint honored: the prompt explicitly tells the model not to
 invent, recompute, or restate any number not already in the structured
-JSON — narrative and strategy only. *Whether the model actually
-complies is not yet verified* — that's exactly the eval harness's
-grounding-check job (section 5), still not built.
+JSON — narrative and strategy only. Whether the model actually
+complies is now checkable — see section 5, grounding checks are built.
 
 Resolved open questions from the original spec:
 - **Single LLM call**, not per-segment — the whole structured plan is
@@ -111,32 +110,56 @@ This is what eventually feeds the eval harness with real-world ground
 truth (did the plan's assumptions hold up?) rather than only synthetic
 test cases.
 
-### 5. Eval harness (`eval/`) — not built, portfolio centerpiece
+### 5. Eval harness (`eval/`) — grounding checks built, rest not yet; portfolio centerpiece
 
 Purpose: demonstrate the reasoning layer is reliable, not just plausible-
 sounding. Proposed dimensions:
 
-- **Grounding checks** — does the LLM narrative's stated paces/times
-  match the deterministic engine's actual output for those segments?
-  (Automatable, no LLM judge needed — just string/number matching
-  against `SegmentPacePlan`/`FuelingPlan`.)
+- **Grounding checks — built (`eval/grounding.py`).** Does the LLM
+  narrative's stated paces/times/fueling-rates/grades match the
+  structured plan it was given? No LLM judge — regex extraction of
+  numeric claims (`check_narrative_grounding()`), checked against exact
+  values (paces, total time) or ranges (fluid/sodium). Pass/fail bar
+  resolved: **exact string match** for paces/times (they come from
+  `format_pace()`/a fixed H:MM:SS format, so exact match is the right
+  bar, not a tolerance band — there's no reason a grounded citation
+  would round differently) and **range membership** for fueling
+  (already a low-high band, not a point value). Wired into
+  `race_plan.py --narrative --eval`; 11 tests against hand-written
+  narrative fixtures, both clean and deliberately fabricated, including
+  a fixture that caught a real bug in the checker itself during
+  development (comparing `"6:04"` against `"6:04/km"` never matched).
+  Known limitation: pattern-matching only catches numeric claims with a
+  recognizable format, not prose-only claims, and will false-positive
+  on a coincidental match (e.g. a percentage used as a vague qualifier,
+  not a grade citation) — an accepted cost of avoiding an LLM judge.
 - **Consistency checks** — same inputs in, same structured plan out
-  (or within tolerance) across repeated calls.
+  (or within tolerance) across repeated calls. Not built: the
+  structured plan itself is already guaranteed identical (pure
+  Python, no LLM), so the only open question is narrative-text
+  consistency across repeated real calls — needs actual repeated API
+  calls (cost) to be meaningful, not just a fixture-based test.
 - **Constraint adherence** — if runner context says "max 3 gels," does
-  the fueling schedule respect that?
+  the fueling schedule respect that? Blocked on runner free-text
+  context existing at all (see section 3's "out of scope" list) — not
+  built.
 - **Quality/usefulness** — harder to automate; likely needs an LLM-judge
   rubric or a small hand-labeled set, scored against criteria like
   "identifies the highest-risk segment," "fueling timing is
-  actionable."
+  actionable." Not built — needs either an LLM judge (cost) or manual
+  labeling effort.
 - **Backtest against real races** (once execution analysis exists) —
   did the plan's risk calls (e.g. "you'll fade on this climb") predict
-  what actually happened in the runner's actual splits?
+  what actually happened in the runner's actual splits? Not built —
+  blocked on section 4 (execution analysis) existing.
 
 Open questions:
-- What's the pass/fail bar for grounding checks — exact match or
-  tolerance band (e.g. within 1 sec/km)?
 - Golden test set: synthetic courses only, or curated real GPX files
-  too?
+  too? (`mmm25.gpx`, a real Madrid half marathon course, already exists
+  in the repo and was used to validate the grade-damping fix — a
+  natural candidate for a grounding-check golden set once real
+  `--narrative` output is being collected somewhere, e.g. cached
+  fixtures of real model responses rather than only synthetic ones.)
 
 ### 6. Frontend — not built
 
@@ -148,14 +171,14 @@ layer, not reimplement any formatting logic already in `race_plan.py`.
 
 1. ~~`reasoning/` — structured plan + narrative, single-call~~ — built,
    no runner context yet (see section 3's "out of scope" list).
-2. `eval/` grounding + consistency checks against `reasoning/` — these
-   don't require an LLM judge and catch the most damaging failure mode
-   (LLM contradicting the deterministic math) early. **Next up** — the
-   grounding constraint in `build_narrative_prompt()` is currently just
-   a prompt instruction, unverified.
-3. Execution analysis — needs at least one real race's actual splits
-   to be useful; can be stubbed with synthetic "actual" data before
-   that.
+2. ~~`eval/` grounding checks against `reasoning/`~~ — built
+   (`eval/grounding.py`), catches the most damaging failure mode (LLM
+   contradicting the deterministic math) without needing an LLM judge.
+   Consistency checks not built (need real repeated API calls to be
+   meaningful, not just fixtures).
+3. **Next up.** Execution analysis — needs at least one real race's
+   actual splits to be useful; can be stubbed with synthetic "actual"
+   data before that.
 4. Eval harness quality/backtest dimensions, once execution analysis
    and a few real races exist.
 5. Frontend, once the JSON contract from `reasoning/` is stable.

@@ -5,7 +5,8 @@ pacing plan (grade + heat adjusted) and a fueling plan (carbs/fluid/sodium).
 The pacing/fueling core is fully deterministic and free to run. An
 opt-in LLM layer (`--narrative`) turns that plan into a coaching
 narrative — the only part of the project that calls an LLM or costs
-money.
+money — and a free eval harness (`--eval`) checks whether that
+narrative actually stayed grounded in the numbers it was given.
 
 ## Setup
 
@@ -19,9 +20,10 @@ pip install -r requirements.txt
 pytest tests/ -v
 ```
 
-89 tests, all deterministic — no network calls and no LLM calls required
-(the weather and reasoning modules both use dependency injection so
-they're tested with canned responses).
+100 tests, all deterministic — no network calls and no LLM calls
+required (the weather and reasoning modules both use dependency
+injection so they're tested with canned responses; the eval module is
+tested against hand-written narrative fixtures).
 
 ## Run the MVP
 
@@ -83,6 +85,22 @@ invent, recompute, or restate anything not already there — its job is
 strategy and narrative (e.g. "don't bank time on the km 8 downhill,
 that's where the heat starts biting"), not the math.
 
+## Checking the narrative stayed grounded (free)
+
+```bash
+python race_plan.py --gpx mmm25.gpx --goal-pace 5:05 --temp 22 --humidity 55 --narrative --eval
+```
+
+`--eval` (only meaningful alongside `--narrative`) runs `eval/grounding.py`
+against the narrative that was just generated — no extra API call, it's
+just inspecting the response already returned. It regex-extracts
+numeric claims (paces, total times, fueling rates, grade percentages)
+and checks each one against the structured plan, catching exactly the
+failure mode the prompt asks the model to avoid but can't enforce on
+its own: stating a pace or number that isn't actually in the plan. It's
+pattern-matching, not an LLM judge — narrow by design, see
+`OVERVIEW.md` for the tradeoffs.
+
 ## Architecture
 
 ```
@@ -101,10 +119,14 @@ Weather   ─┘                                        │
                                                       ▼  (only with --narrative)
                                      structured_race_plan() → generate_race_narrative()
                                                                 (LLM call, costs money)
+                                                      │
+                                                      ▼  (only with --narrative --eval)
+                                          evaluate_race_narrative()  (free)
 ```
 
 See `race-execution-engine-spec.md` for the full v1 spec and roadmap
-(execution analysis, eval harness — not built yet).
+(execution analysis, and the eval harness's remaining dimensions —
+consistency, constraint adherence, quality/backtest — not built yet).
 
 ## What's built so far
 
@@ -113,7 +135,8 @@ See `race-execution-engine-spec.md` for the full v1 spec and roadmap
 - [x] `ingest/gpx_course.py` — GPX parsing + segmentation, 15 tests (incl. integration checks against `data/sample_race.gpx`)
 - [x] `ingest/weather.py` — Open-Meteo fetch, historical-average fallback beyond the forecast window (dependency-injected), 9 tests
 - [x] `reasoning/narrative.py` — structured plan (free) + coaching narrative (opt-in LLM call, dependency-injected same as weather), WBGT-based safety flags, 14 tests
+- [x] `eval/grounding.py` — grounding checks (does the narrative's numeric claims match the structured plan?), free, opt-in via `--eval`, 11 tests
 - [x] `race_plan.py` — MVP CLI tying it all together
 - [ ] execution analysis — planned vs actual splits
-- [ ] `eval/` — the eval harness (the portfolio centerpiece; the narrative's grounding constraint is a prompt instruction right now, not something verified yet)
+- [ ] eval harness: consistency checks, constraint adherence, quality/usefulness scoring, backtesting — grounding checks only so far
 - [ ] frontend

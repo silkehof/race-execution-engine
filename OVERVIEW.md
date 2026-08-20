@@ -3,7 +3,7 @@
 Living document. Update this as the project grows — new modules, new
 layers, new decisions. Keep it in sync with reality, not aspirational.
 
-Last updated: 2026-08-16
+Last updated: 2026-08-20
 
 ## What this is
 
@@ -12,11 +12,14 @@ pacing plan (grade + heat adjusted) and a fueling plan (carbs/fluid/sodium).
 
 Deterministic core (course/weather ingestion, pacing, fueling) plus an
 opt-in LLM reasoning layer (`reasoning/`) that turns the deterministic
-plan into a coaching narrative. The reasoning layer is the only part of
-the project that calls an LLM or costs money — everything else is free
-and fully deterministic. Execution analysis and an eval harness are
-still not built — see `race-execution-engine-spec.md` for the full v1
-spec and roadmap, and "Not built yet" below for the short version.
+plan into a coaching narrative, plus a small eval harness (`eval/`)
+that checks whether the narrative actually stayed grounded in the
+numbers it was given. The reasoning layer is the only part of the
+project that calls an LLM or costs money — everything else, including
+the eval harness itself, is free and fully deterministic. Execution
+analysis (planned vs. actual splits) is still not built — see
+`race-execution-engine-spec.md` for the full v1 spec and roadmap, and
+"Not built yet" below for the short version.
 
 ## Layout
 
@@ -30,12 +33,14 @@ execution-engine/
 │   └── weather.py       Open-Meteo fetch (dependency-injected fetch_fn)
 ├── reasoning/            LLM layer — the only part that costs money
 │   └── narrative.py      structured plan (free) + coaching narrative (LLM call)
+├── eval/                 eval harness — free, checks reasoning/'s output
+│   └── grounding.py      does the narrative stay grounded in the structured plan?
 ├── scripts/
 │   └── generate_sample_gpx.py   builds data/sample_race.gpx
 ├── data/
 │   └── sample_race.gpx  synthetic 8km rolling course
 ├── mmm25.gpx             real race course (Movistar Medio Maraton Madrid)
-├── tests/                81 tests, pytest, no network calls, no LLM calls
+├── tests/                100 tests, pytest, no network calls, no LLM calls
 ├── race_plan.py         MVP CLI — ties everything together
 ├── demo.py              quick sanity check with hand-built segments
 ├── requirements.txt     gpxpy, requests, pytest
@@ -62,6 +67,9 @@ Weather   ─┘                                        │
                                                       │
                                                       ▼
                                      generate_race_narrative()  (LLM call, costs money)
+                                                      │
+                                                      ▼  (only with --narrative --eval)
+                                     evaluate_race_narrative()  (deterministic, free)
 ```
 
 ## Module notes
@@ -189,6 +197,32 @@ calls and zero cost.
   Real calls use `DEFAULT_MODEL` (currently Haiku — cheapest current
   model, short prompt, doesn't need more).
 
+**`eval/grounding.py`** — the eval harness (so far: grounding checks
+only — see "Open questions" for what's still missing). Answers the
+question `build_narrative_prompt` leaves open: did the model actually
+comply with "don't invent numbers"? No LLM judge — regex-extracts
+numeric claims from the narrative (paces like `6:04/km`, total times
+like `1:56:25`, fueling rates like `49 g/hr`, grade percentages like
+`4.2%`) and checks each one against the structured plan it was
+supposedly grounded in.
+- `check_narrative_grounding(narrative_text, structured_plan)` →
+  `GroundingReport` (`violations`, `is_grounded`). Deliberately narrow:
+  catches numeric claims with a recognizable pattern, not paraphrased
+  or prose-only claims, and will false-positive on any number that
+  happens to match one of these patterns for an unrelated reason (e.g.
+  a stray "50%" used as a vague qualifier). That's the accepted
+  tradeoff of pattern-matching over an LLM judge — cheap, deterministic,
+  zero additional API cost, at the price of precision. Verified against
+  its own known bug during development: an early version compared
+  `"6:04"` against `"6:04/km"` and never matched anything — caught by a
+  test asserting a *correct* pace citation should pass, not just that a
+  *wrong* one should fail.
+- `evaluate_race_narrative(result)`: one-line wrapper around
+  `check_narrative_grounding` for a `RaceNarrative`.
+- Wired into `race_plan.py --eval` (only meaningful combined with
+  `--narrative`; free, since it only inspects the response already
+  returned — no extra API call).
+
 **`race_plan.py`** — CLI entrypoint. `--gpx`, `--goal-pace`, plus either
 `--temp`/`--humidity` (manual) or `--lat`/`--lon`/`--date`/`--start-hour`
 (live fetch). Prints a per-segment pacing table + total time + fueling
@@ -198,7 +232,9 @@ the output header always labels which one is active. `--narrative`
 additionally calls the reasoning layer for a coaching narrative (needs
 `anthropic` + `ANTHROPIC_API_KEY`, costs a small amount, off by
 default; fails with a clear message rather than crashing if the
-package/key isn't set up).
+package/key isn't set up). `--eval` (with `--narrative`) runs the
+grounding check against that narrative and prints a pass/fail report —
+free, no extra API call.
 
 **`demo.py`** — pre-ingest sanity check with hand-built segments
 (predates `ingest/`). Superseded by `race_plan.py` for anything
@@ -207,25 +243,45 @@ on `engine/` without needing a GPX file.
 
 ## Testing
 
-`pytest tests/ -v` — 89 tests, fully deterministic, no network calls,
+`pytest tests/ -v` — 100 tests, fully deterministic, no network calls,
 no LLM calls (weather module tested via injected canned `fetch_fn`;
 reasoning module tested via injected canned `call_llm_fn`, same
-pattern; the GPX layer has a real-file integration check against
-`data/sample_race.gpx` alongside the pure-function unit tests).
+pattern; eval module tested against hand-written narrative fixtures,
+both clean and deliberately fabricated; the GPX layer has a real-file
+integration check against `data/sample_race.gpx` alongside the
+pure-function unit tests).
 
 ## Not built yet (see `race-execution-engine-spec.md` for detail)
 
 - [x] `reasoning/` — LLM layer: structured plan (free, deterministic) +
       coaching narrative (opt-in LLM call via `race_plan.py --narrative`)
+- [x] `eval/` — grounding checks only so far (does the narrative stay
+      grounded in the structured plan's numbers?), via `race_plan.py
+      --narrative --eval`. Consistency checks, constraint adherence,
+      quality/usefulness (LLM-judge), and backtesting are still not
+      built — see "Open questions" below and the spec's eval harness
+      section for why each needs either real repeated API calls, an
+      LLM judge, or execution-analysis data that doesn't exist yet.
 - [ ] execution analysis — planned vs. actual splits
-- [ ] `eval/` — eval harness (called out as the portfolio centerpiece;
-      the narrative's "don't invent numbers" grounding constraint is
-      only a prompt instruction right now — checking whether the model
-      actually complies needs this)
 - [ ] frontend
 
 ## Open questions / things to revisit as this grows
 
+- **`eval/grounding.py` is pattern-matching, not an LLM judge — false
+  positives are expected, and it can only check what it recognizes.**
+  It extracts numeric claims with recognizable formats (paces, total
+  times, fueling rates, grade percentages) and checks each against the
+  structured plan; it can't evaluate a prose-only claim ("that climb is
+  brutal") or a paraphrased number, and it'll flag any coincidental
+  match (a stray percentage used as a vague qualifier, not a grade) as
+  a violation even though it isn't one. Consistency checks (same input,
+  stable output across repeated real calls), constraint adherence
+  (needs runner free-text context, which doesn't exist yet), and
+  quality/usefulness scoring (needs an LLM judge or a hand-labeled set)
+  are the harness's other proposed dimensions per the spec — none
+  built yet, since each needs either money (repeated real API calls, an
+  LLM judge) or a dependency that doesn't exist yet (execution analysis
+  for backtesting).
 - **Grade damping ratio (0.5) is a heuristic, applied symmetrically.**
   Unlike the Minetti curve it damps, there's no published number for
   "how much do real racers under-adjust vs. the theoretical metabolic
