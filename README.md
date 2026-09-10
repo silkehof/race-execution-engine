@@ -8,6 +8,18 @@ narrative — the only part of the project that calls an LLM or costs
 money — and a free eval harness (`--eval`) checks whether that
 narrative actually stayed grounded in the numbers it was given.
 
+## How this was built
+
+This is an AI-built project. The code was written by Claude (via Claude Code) rather
+than typed by hand, and the physiology it rests on — Minetti's grade curve, the WBGT
+heat model, the ACSM fueling ranges — was researched during the build, not knowledge
+I brought to it. The Python is deliberately plain for the same reason.
+
+What I contributed is the direction: keep the LLM out of the math, damp the grade
+curve to something a runner can actually execute instead of the theoretical optimum,
+and build the grounding eval because a model writing a coaching note will otherwise
+invent numbers. Those are the calls I'd stand behind in a conversation about it.
+
 ## Setup
 
 ```bash
