@@ -18,7 +18,7 @@ I brought to it. The Python is deliberately plain for the same reason.
 What I contributed is the direction: keep the LLM out of the math, damp the grade
 curve to something a runner can actually execute instead of the theoretical optimum,
 and build the grounding eval because a model writing a coaching note will otherwise
-invent numbers. Those are the calls I'd stand behind in a conversation about it.
+invent numbers.
 
 ## Setup
 
